@@ -5,6 +5,7 @@
  * Copyright (C) 2009 Nikias Bassen <nikias@gmx.li>
  * Copyright (C) 2009-2020 Martin Szulecki <martin.szulecki@libimobiledevice.org>
  * Copyright (C) 2014 Mikkel Kamstrup Erlandsen <mikkel.kamstrup@xamarin.com>
+ * Modified 25/03/2025 by Przemyslaw Muszynski
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -100,17 +101,55 @@ static void usb_disconnect(struct usb_device *dev)
 	} ENDFOREACH
 
 	// Busy-wait until all xfers are closed
-	while(collection_count(&dev->rx_xfers) || collection_count(&dev->tx_xfers)) {
-		struct timeval tv;
-		int res;
+	//while(collection_count(&dev->rx_xfers) || collection_count(&dev->tx_xfers)) {
+	//	struct timeval tv;
+	//	int res;
+//
+	//	tv.tv_sec = 0;
+	//	tv.tv_usec = 1000;
+	//	if((res = libusb_handle_events_timeout(NULL, &tv)) < 0) {
+	//		usbmuxd_log(LL_ERROR, "libusb_handle_events_timeout for usb_disconnect failed: %s", libusb_error_name(res));
+	//		break;
+	//	}
+	//}
+	    // Wait for cancellations to complete but with a timeout
+    int timeout_ms = 100; // 100ms timeout
+    int wait_step_us = 1000; // 1ms steps
+    int max_iterations = timeout_ms * 1000 / wait_step_us;
+    int iterations = 0;
+		while((collection_count(&dev->rx_xfers) || collection_count(&dev->tx_xfers)) && iterations < max_iterations) {
+        struct timeval tv;
+        int res;
 
-		tv.tv_sec = 0;
-		tv.tv_usec = 1000;
-		if((res = libusb_handle_events_timeout(NULL, &tv)) < 0) {
-			usbmuxd_log(LL_ERROR, "libusb_handle_events_timeout for usb_disconnect failed: %s", libusb_error_name(res));
-			break;
-		}
-	}
+        tv.tv_sec = 0;
+        tv.tv_usec = wait_step_us;
+        if((res = libusb_handle_events_timeout(NULL, &tv)) < 0) {
+            usbmuxd_log(LL_ERROR, "libusb_handle_events_timeout for usb_disconnect failed: %s", libusb_error_name(res));
+            break;
+        }
+        iterations++;
+    }
+
+	// If we still have pending transfers after timeout, force cleanup
+    if(collection_count(&dev->rx_xfers) || collection_count(&dev->tx_xfers)) {
+        usbmuxd_log(LL_WARNING, "Some transfers failed to complete during disconnect for device %d-%d - forcing cleanup", 
+                    dev->bus, dev->address);
+                    
+        // Force cleanup of any remaining transfers
+        FOREACH(struct libusb_transfer *xfer, &dev->rx_xfers) {
+        if(xfer->buffer)
+            free(xfer->buffer);
+            libusb_free_transfer(xfer);
+        } ENDFOREACH
+        collection_init(&dev->rx_xfers); // reinitialize to clear all entries
+        
+        FOREACH(struct libusb_transfer *xfer, &dev->tx_xfers) {
+            if(xfer->buffer)
+                free(xfer->buffer);
+            libusb_free_transfer(xfer);
+        } ENDFOREACH
+        collection_init(&dev->tx_xfers); // reinitialize to clear all entries
+    }
 
 	collection_free(&dev->tx_xfers);
 	collection_free(&dev->rx_xfers);

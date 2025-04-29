@@ -1,3 +1,7 @@
+Modification 25/03/2025
+* Changes:
+  - Ensured  that usb_disconnect() method will free libusb resources upon stuck transfer to avoid infinite event pooling
+
 Version 1.1.1
 ~~~~~~~~~~~~~
 
